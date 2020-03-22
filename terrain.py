@@ -1,3 +1,4 @@
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 import numpy as np
@@ -6,6 +7,8 @@ import sys
 import noise
 
 from scipy.spatial import Voronoi 
+
+matplotlib.use('GTK3Agg')
 
 class VoronoiFunctions:
 
@@ -111,7 +114,7 @@ class VoronoiFunctions:
         self.points = np.stack((seedX, seedY), axis = -1)
 
     def buildVoronoiCells(self):
-        eps = sys.float_info.epsilon
+        # eps = sys.float_info.epsilon
         
         self.voronoi = Voronoi(self.points)
 
@@ -164,21 +167,23 @@ class VoronoiFunctions:
         centroid_y = (1.0/(6.0*area)) * centroid_y
         return np.array([[centroid_x, centroid_y]])
 
-    def relaxPoints(self):
+    def relaxPoints(self, iterations= 1):
         # Douglas Duhaime, author #
         # https://gist.github.com/duhaime/3e781194ebaccc28351a5d53989caa70 #
+        # I added functionality to iterate over this #
         '''
         Moves each point to the centroid of its cell in the Voronoi map to "relax"
         the points (i.e. jitter them so as to spread them out within the space).
         '''
-        centroids = []
-        for region in self.filteredRegions:
-            vertices = self.voronoi.vertices[region + [region[0]], :]
-            centroid = self.findCentroid(vertices) # get the centroid of these verts
-            centroids.append(list(centroid[0]))
+        for iteration in range(iterations):
+            centroids = []
+            for region in self.filteredRegions:
+                vertices = self.voronoi.vertices[region + [region[0]], :]
+                centroid = self.findCentroid(vertices) # get the centroid of these verts
+                centroids.append(list(centroid[0]))
 
-        self.points = centroids # store the centroids as the new point positions
-        self.buildVoronoiCells() # build new cells from new points
+            self.points = centroids # store the centroids as the new point positions
+            self.buildVoronoiCells() # build new cells from new points
 
     def plotVoronoi(self):
             plt.figure()
@@ -198,14 +203,14 @@ class VoronoiFunctions:
 
             plt.show()
 
-class TerrainModification:
+class TerrainFunctions:
     def __init__(self, width, height, resolution, seed):
         self.width = width
         self.height = height
         self.resolution = resolution
         self.seed = seed
         
-    def generateNoiseMap(self, scale, octaves= 4, persistence= 0.5, lacunarity= 2.0):
+    def generateNoiseElevation(self, scale, octaves= 4, persistence= 0.5, lacunarity= 2.0):
         noiseMap = np.zeros((self.width, self.height))
         for x in range(self.width):
             for y in range(self.height):
@@ -223,7 +228,7 @@ class TerrainModification:
 
 width = 1000
 height = 1000
-points = 1000
+points = 10000
 seed = 89
 
 scale = 800
@@ -232,13 +237,13 @@ lacunarity = 2
 persistence = .5
 
 voronoiTerrain = VoronoiFunctions(width, height, points, seed)
+voronoiTerrain.relaxPoints(1)
+
+print(len(voronoiTerrain.points))
+print(len(voronoiTerrain.filteredRegions))
+
 voronoiTerrain.plotVoronoi()
-voronoiTerrain.relaxPoints()
-voronoiTerrain.plotVoronoi()
-voronoiTerrain.relaxPoints()
-voronoiTerrain.plotVoronoi()
-voronoiTerrain.relaxPoints()
-voronoiTerrain.plotVoronoi()
+
 
 #noiseMap = terrain.generateNoiseMap(scale, octaves, persistence, lacunarity, seed)
 #terrain.plotHeightmap(noiseMap)
