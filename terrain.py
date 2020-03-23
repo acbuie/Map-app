@@ -2,107 +2,23 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 import numpy as np
-import sys
 
 import noise
 
-from scipy.spatial import Voronoi 
+from scipy.spatial import Voronoi
 
-matplotlib.use('GTK3Agg')
+# matplotlib.use('GTK3Agg')
+
 
 class VoronoiFunctions:
 
-    def __init__(self, width, height, resolution= None, seed= 0):
+    def __init__(self, width, height, resolution=None, seed=0):
         self.width = width
         self.height = height
         self.seed = seed
         self.resolution = resolution
         self.makeRandomPoints()
         self.buildVoronoiCells()
-
-    # should only be run before plotting, use standard Voronoi() to generate regions
-    @staticmethod
-    def voronoiFinitePloygons2D(vor, radius= None):
-        # Pauli Virtanen, author #
-        # https://gist.github.com/pv/8036995 # 
-        """
-        Reconstruct infinite voronoi regions in a 2D diagram to finite
-        regions.
-        Parameters
-        ----------
-        vor : Voronoi
-            Input diagram
-        radius : float, optional
-            Distance to 'points at infinity'.
-        Returns
-        -------
-        regions : list of tuples
-            Indices of vertices in each revised Voronoi regions.
-        vertices : list of tuples
-            Coordinates for revised Voronoi vertices. Same as coordinates
-            of input vertices, with 'points at infinity' appended to the
-            end.
-        """
-
-        if vor.points.shape[1] != 2:
-            raise ValueError("Requires 2D input")
-
-        new_regions = []
-        new_vertices = vor.vertices.tolist()
-
-        center = vor.points.mean(axis=0)
-        if radius is None:
-            radius = vor.points.ptp().max()*2
-
-        # Construct a map containing all ridges for a given point
-        all_ridges = {}
-        for (p1, p2), (v1, v2) in zip(vor.ridge_points, vor.ridge_vertices):
-            all_ridges.setdefault(p1, []).append((p2, v1, v2))
-            all_ridges.setdefault(p2, []).append((p1, v1, v2))
-
-        # Reconstruct infinite regions
-        for p1, region in enumerate(vor.point_region):
-            vertices = vor.regions[region]
-
-            if all(v >= 0 for v in vertices):
-                # finite region
-                new_regions.append(vertices)
-                continue
-
-            # reconstruct a non-finite region
-            ridges = all_ridges[p1]
-            new_region = [v for v in vertices if v >= 0]
-
-            for p2, v1, v2 in ridges:
-                if v2 < 0:
-                    v1, v2 = v2, v1
-                if v1 >= 0:
-                    # finite ridge: already in the region
-                    continue
-
-                # Compute the missing endpoint of an infinite ridge
-
-                t = vor.points[p2] - vor.points[p1] # tangent
-                t /= np.linalg.norm(t)
-                n = np.array([-t[1], t[0]])  # normal
-
-                midpoint = vor.points[[p1, p2]].mean(axis=0)
-                direction = np.sign(np.dot(midpoint - center, n)) * n
-                far_point = vor.vertices[v2] + direction * radius
-
-                new_region.append(len(new_vertices))
-                new_vertices.append(far_point.tolist())
-
-            # sort region counterclockwise
-            vs = np.asarray([new_vertices[v] for v in new_region])
-            c = vs.mean(axis=0)
-            angles = np.arctan2(vs[:,1] - c[1], vs[:,0] - c[0])
-            new_region = np.array(new_region)[np.argsort(angles)]
-
-            # finish
-            new_regions.append(new_region.tolist())
-
-        return new_regions, np.asarray(new_vertices) 
 
     def makeRandomPoints(self):
         # generate seeds
@@ -111,140 +27,184 @@ class VoronoiFunctions:
         seedX = (np.random.rand(self.resolution) * 2 - 1) * 0.5 * self.width
         seedY = (np.random.rand(self.resolution) * 2 - 1) * 0.5 * self.height
 
-        self.points = np.stack((seedX, seedY), axis = -1)
+        self.points = np.stack((seedX, seedY), axis=-1)
+
+        print('Done makeRandomPoints')
 
     def buildVoronoiCells(self):
-        # eps = sys.float_info.epsilon
-        
+        """
+        Generates the voronoi object. For some reason Voronoi() generates an empty region, sometimes at the front
+        of self.voronoi.regions, sometimes at the end. So, also removes this region from self.voronoi.regions.
+        """
+        # create voronoi object
         self.voronoi = Voronoi(self.points)
 
-        self.filteredRegions = [] # list of regions with vertices inside Voronoi map
-        for region in self.voronoi.regions:
-            inside_map = True    # is this region inside the Voronoi map?
-            for index in region: # index = the idx of a vertex in the current region
+        # remove empty region from self.voronoi.regions
+        # see about doing with with np arrays?
+        for index, ls in enumerate(self.voronoi.regions):
+            if Utility.isEmptyList(ls):
+                del self.voronoi.regions[index]
+                break
 
-                # check if index is inside Voronoi map (indices == -1 are outside map)
-                if index == -1:
-                    inside_map = False
-                    break
+        # convert self.voronoi.regions to array of array instead of list of list for faster calculation
+        self.voronoi.regions = np.array(
+            [np.array(region) for region in self.voronoi.regions]
+        )
 
-                # check if the current coordinate is in the Voronoi map's bounding box
-                # else:
-                #     coords = self.voronoi.vertices[index]
-                #     if not (-0.5 * self.width - eps <= coords[0] and
-                #             0.5 * self.width + eps >= coords[0] and
-                #             -0.5 * self.height - eps <= coords[1] and
-                #             0.5 * self.height + eps >= coords[1]):
-                #         inside_map = False
-                #         break
+        # create voronoi regions object
+        self.vorPolygon = [self.voronoi.vertices[reg]
+                           for reg in self.voronoi.regions]
 
-            # store the region if it has vertices and is inside Voronoi map
-            if region != [] and inside_map:
-                self.filteredRegions.append(region)
+        print('Done buildVoronoiCells')
 
-    def findCentroid(self, vertices):
-        # Douglas Duhaime, author #
-        # https://gist.github.com/duhaime/3e781194ebaccc28351a5d53989caa70 #
-        '''
-        Find the centroid of a Voroni region described by `vertices`, and return a
-        np array with the x and y coords of that centroid.
-        The equation for the method used here to find the centroid of a 2D polygon
-        is given here: https://en.wikipedia.org/wiki/Centroid#Of_a_polygon
-        @params: np.array `vertices` a numpy array with shape n,2
-        @returns np.array a numpy array that defines the x, y coords
-        of the centroid described by `vertices`
-        '''
-        area = 0
-        centroid_x = 0
-        centroid_y = 0
-        for i in range(len(vertices)-1):
-            step = (vertices[i, 0] * vertices[i+1, 1]) - (vertices[i+1, 0] * vertices[i, 1])
-            area += step
-            centroid_x += (vertices[i, 0] + vertices[i+1, 0]) * step
-            centroid_y += (vertices[i, 1] + vertices[i+1, 1]) * step
-        area /= 2
-        centroid_x = (1.0/(6.0*area)) * centroid_x
-        centroid_y = (1.0/(6.0*area)) * centroid_y
-        return np.array([[centroid_x, centroid_y]])
-
-    def relaxPoints(self, iterations= 1):
-        # Douglas Duhaime, author #
-        # https://gist.github.com/duhaime/3e781194ebaccc28351a5d53989caa70 #
-        # I added functionality to iterate over this #
-        '''
-        Moves each point to the centroid of its cell in the Voronoi map to "relax"
-        the points (i.e. jitter them so as to spread them out within the space).
-        '''
+    def improveRandomPoints(self, iterations):
+        """
+        Takes self and averages vertices of self.voronoi.vertices for each voronoi region.
+        The average of these vertices is stored in self.points. This is an opproximation of Lloyd relaxation.
+        """
         for iteration in range(iterations):
-            centroids = []
-            for region in self.filteredRegions:
-                vertices = self.voronoi.vertices[region + [region[0]], :]
-                centroid = self.findCentroid(vertices) # get the centroid of these verts
-                centroids.append(list(centroid[0]))
+            avgPoints = []
+            # potential to vectorize?
+            # currently loops over vertices[regions] twice (once in buildVoronoiCells)
+            # but I struggled to average the points from the vorPolygon object. Will try again another day.
+            for reg in self.voronoi.regions:
+                vorPoly = self.voronoi.vertices[reg]
+                avgPoints.append(list(np.mean(vorPoly, 0)))
 
-            self.points = centroids # store the centroids as the new point positions
-            self.buildVoronoiCells() # build new cells from new points
+            # set self.points to new point, regenerate Voronoi cells
+            self.points = avgPoints
 
-    def plotVoronoi(self):
-            plt.figure()
-            ax = plt.subplot(111)
-            ax.set_xticks([])
-            ax.set_yticks([])
+            print(f'Done improveRandomPoints {iteration}')
+            self.buildVoronoiCells()
 
-            ax.set_xlim(-0.5 * self.width, 0.5 * self.width)
-            ax.set_ylim(-0.5 * self.height, 0.5 * self.height)
 
-            regions, vertices = VoronoiFunctions.voronoiFinitePloygons2D(self.voronoi)
-            voronoiPolygons = [vertices[reg] for reg in regions]
+class ElevationFunctions:
 
-            for polygon in voronoiPolygons:
-                colored_cell = Polygon(polygon)
-                ax.add_patch(colored_cell)
+    @staticmethod
+    def simplexNoise(point, seed=0, scale=100, octaves=4, persistence=0.5, lacunarity=2.0):
+        """
+        Return a noise value given an (x, y), and other optional inputs
+        """
+        return noise.snoise2(
+            point[0] / scale, point[1] / scale, octaves, persistence, lacunarity, base=seed
+        )
 
-            plt.show()
+    @staticmethod
+    def generateRasterPoints(width, height):
+        """
+        Method to create evenly spaced points in array. Takes int x, int y
 
-class TerrainFunctions:
-    def __init__(self, width, height, resolution, seed):
-        self.width = width
-        self.height = height
-        self.resolution = resolution
-        self.seed = seed
-        
-    def generateNoiseElevation(self, scale, octaves= 4, persistence= 0.5, lacunarity= 2.0):
-        noiseMap = np.zeros((self.width, self.height))
-        for x in range(self.width):
-            for y in range(self.height):
-                noiseMap[x][y] = noise.snoise2(x / scale, y / scale, octaves, persistence, lacunarity, base= self.seed)
-        return noiseMap
-    
-    
-    def plotHeightmap(self, heightMap):
-    # Plot #
-        plt.imshow(heightMap)
-        plt.show()
+        For generataing a noiseMap, instead of a voronoi diagram, if wanted
+        Not sure if this will be used much. Currently needs to be reshaped
+        after generating elevationFromNoise. Could probably refactor the code
+        to run a different noise method on the correcly shaped data?
+        """
+        return np.indices((width + 1, height + 1)).T.reshape(-1, 2)
+
+    @staticmethod
+    def elevationFromNoise(points):
+        """
+        Apply noise function to voronoi points. Takes array of (x, y), or meshgrid arrays
+        Type 'voronoi' applies function to 1-D array of (x, y), type 'raster' applies function
+        to 2-D arrays
+        Replace 'ElevationFunctions.simplexNoise' with other elevation functions
+        """
+        noise = np.apply_along_axis(ElevationFunctions.simplexNoise, 1, points)
+        normalized = (noise - np.amin(noise)) / \
+            (np.amax(noise) - np.amin(noise))
+
+        print('Done elevationFromNoise')
+
+        return normalized
 
     def erodeTerrain(self, heightMap, interations):
         pass
+
+
+class PlottingFunctions:
+
+    @staticmethod
+    def colorFromElevation(elevation):
+        """
+        Takes a value (elevation) and returns a color
+        Currently just sets a random color
+        """
+        # Possible colors to be, would like to set up a selector eventually
+
+        darkblue = [10, 100, 180]
+        lightblue = [65, 105, 225]
+        beach = [238, 214, 175]
+        green = [34, 139, 34]
+        mountain = [55, 60, 65]
+        snow = [255, 250, 250]
+
+        if elevation < 0.30:
+            color = darkblue
+        elif elevation < 0.47:
+            color = lightblue
+        elif elevation < 0.55:
+            color = beach
+        elif elevation < 0.80:
+            color = green
+        elif elevation < 0.95:
+            color = mountain
+        elif elevation <= 1.00:
+            color = snow
+
+        return list(np.array(color)/255)
+
+    @staticmethod
+    def plotVoronoi(width, height, vorPolygon, elevation):
+        """
+        Takes object of class 'VoronoiFunctions' and elevation array
+        """
+        plt.figure()
+        ax = plt.subplot(111)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+        ax.set_xlim(-0.5 * width, 0.5 * width)
+        ax.set_ylim(-0.5 * height, 0.5 * height)
+
+        for index, polygon in enumerate(vorPolygon):
+            colored_cell = Polygon(
+                polygon,
+                facecolor=PlottingFunctions.colorFromElevation(
+                    elevation[index]),
+                linewidth=None
+            )
+            ax.add_patch(colored_cell)
+
+        plt.show()
+
+
+class Utility:
+
+    @staticmethod
+    def isEmptyList(list):
+        """
+        Returns true if a list is empty
+        """
+        if not list:
+            return True
+        else:
+            return False
+
 
 width = 1000
 height = 1000
 points = 10000
 seed = 89
 
-scale = 800
-octaves = 4
-lacunarity = 2
-persistence = .5
 
+# construct voronoiTerrain
 voronoiTerrain = VoronoiFunctions(width, height, points, seed)
-voronoiTerrain.relaxPoints(1)
+# Lloyd relaxation of points
+voronoiTerrain.improveRandomPoints(2)
 
-print(len(voronoiTerrain.points))
-print(len(voronoiTerrain.filteredRegions))
+# Calculate elevation for each voronoi region
+elevationVor = ElevationFunctions.elevationFromNoise(voronoiTerrain.points)
 
-voronoiTerrain.plotVoronoi()
-
-
-#noiseMap = terrain.generateNoiseMap(scale, octaves, persistence, lacunarity, seed)
-#terrain.plotHeightmap(noiseMap)
-
+PlottingFunctions.plotVoronoi(
+    width, height, voronoiTerrain.vorPolygon, elevationVor
+)
